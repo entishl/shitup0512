@@ -108,15 +108,21 @@ class GameAutomator:
         r1, c1 = start_pos
         r2, c2 = end_pos
         
+        # 获取原本的中心坐标
         x1, y1 = self.get_cell_center(r1, c1)
         x2, y2 = self.get_cell_center(r2, c2)
         
         print(f"执行消除: ({r1},{c1}) -> ({r2},{c2})")
         
+        # 1. 移动到起始点 (保持不变)
         pyautogui.moveTo(x1, y1)
         pyautogui.mouseDown()
-        # 稍微增加一点移动时间，确保游戏能识别到拖拽轨迹
-        pyautogui.moveTo(x2, y2, duration=0.30) 
+        
+        # 2. 移动到终点 (增加偏移量：向右+10，向下+10)
+        # duration=0.25 模拟人类滑动的耗时，防止太快游戏检测不到
+        pyautogui.moveTo(x2 + 10, y2 + 10, duration=0.25) 
+        
+        # 3. 松开鼠标
         pyautogui.mouseUp()
 
     def run(self):
