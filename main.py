@@ -2,13 +2,10 @@ import cv2
 import numpy as np
 import pyautogui
 import time
-import PIL.Image # 引入 PIL
+import PIL.Image
 
-# ================= 修复 Pillow 10.0+ 报错的问题 =================
-# ddddocr 依赖旧版 Pillow 的 ANTIALIAS，新版移除了，这里手动补上
 if not hasattr(PIL.Image, 'ANTIALIAS'):
     PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
-# ==============================================================
 
 import ddddocr
 from PIL import ImageGrab
@@ -40,7 +37,7 @@ class GameAutomator:
         self.grid = np.zeros((GRID_ROWS, GRID_COLS), dtype=int)
         
         # 初始化 ddddocr
-        self.ocr = ddddocr.DdddOcr()
+        self.ocr = ddddocr.DdddOcr() # 关闭广告打印
 
     def get_cell_center(self, row, col):
         """计算第 row 行, col 列的屏幕绝对坐标"""
@@ -50,21 +47,17 @@ class GameAutomator:
 
     def capture_and_recognize(self):
         """截取屏幕并识别整个棋盘，更新 self.grid"""
-        # 计算覆盖区域
         x1 = START_X - STEP_X // 2
         y1 = START_Y - STEP_Y // 2
         width = GRID_COLS * STEP_X
         height = GRID_ROWS * STEP_Y
         
-        # 截图
         screenshot = ImageGrab.grab(bbox=(x1, y1, x1 + width, y1 + height))
         img_np = np.array(screenshot)
         img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
         
-        # 遍历每个格子
         for r in range(GRID_ROWS):
             for c in range(GRID_COLS):
-                # 截取小图
                 local_cx = (c * STEP_X) + (STEP_X // 2)
                 local_cy = (r * STEP_Y) + (STEP_Y // 2)
                 
@@ -72,7 +65,6 @@ class GameAutomator:
                 cell_img = img_bgr[local_cy-half_crop:local_cy+half_crop, 
                                    local_cx-half_crop:local_cx+half_crop]
                 
-                # 识别
                 _, img_bytes = cv2.imencode('.png', cell_img)
                 res = self.ocr.classification(img_bytes.tobytes())
                 
@@ -83,41 +75,32 @@ class GameAutomator:
         
     def find_first_move(self):
         """
-        只寻找【第一个】可行的移动方案。
+        寻找矩形区域和为 TARGET_SUM (10) 的移动方案。
         """
-        for r in range(GRID_ROWS):
-            for c in range(GRID_COLS):
-                if self.grid[r][c] == 0:
+        # 遍历矩形左上角
+        for r1 in range(GRID_ROWS):
+            for c1 in range(GRID_COLS):
+                
+                # 假设动作必须从非空数字开始（大部分游戏逻辑如此）
+                if self.grid[r1][c1] == 0:
                     continue
-                
-                # --- 1. 横向尝试 (向右) ---
-                current_sum = self.grid[r][c]
-                
-                for k in range(c + 1, GRID_COLS):
-                    val = self.grid[r][k]
-                    if val == 0: continue # 跳过空白
-                    
-                    current_sum += val
-                    
-                    if current_sum == TARGET_SUM:
-                        return ((r, c), (r, k))
-                    elif current_sum > TARGET_SUM:
-                        break 
-                
-                # --- 2. 纵向尝试 (向下) ---
-                current_sum = self.grid[r][c]
-                
-                for k in range(r + 1, GRID_ROWS):
-                    val = self.grid[k][c]
-                    if val == 0: continue
-                    
-                    current_sum += val
-                    
-                    if current_sum == TARGET_SUM:
-                        return ((r, c), (k, c))
-                    elif current_sum > TARGET_SUM:
-                        break
 
+                # 遍历矩形右下角
+                for r2 in range(r1, GRID_ROWS):
+                    # c2 的起始位置：
+                    # 如果在同一行(r1==r2)，c2必须从 c1+1 开始（如果是两个数）或者 c1 开始（如果是单数10）
+                    # 为了通用性，这里从 c1 开始
+                    for c2 in range(c1, GRID_COLS):
+                        
+                        # 获取矩形切片
+                        sub_rect = self.grid[r1:r2+1, c1:c2+1]
+                        current_sum = np.sum(sub_rect)
+                        
+                        if current_sum == TARGET_SUM:
+                            return ((r1, c1), (r2, c2))
+                        elif current_sum > TARGET_SUM:
+                            # 当前行往右加已经爆了，停止内层循环，换下一行继续尝试
+                            break
         return None
 
     def execute_move(self, start_pos, end_pos):
@@ -128,11 +111,12 @@ class GameAutomator:
         x1, y1 = self.get_cell_center(r1, c1)
         x2, y2 = self.get_cell_center(r2, c2)
         
-        print(f"执行消除: 行{r1}列{c1} ({self.grid[r1][c1]}) -> 行{r2}列{c2} ({self.grid[r2][c2]})")
+        print(f"执行消除: ({r1},{c1}) -> ({r2},{c2})")
         
         pyautogui.moveTo(x1, y1)
         pyautogui.mouseDown()
-        pyautogui.moveTo(x2, y2, duration=0.2) 
+        # 稍微增加一点移动时间，确保游戏能识别到拖拽轨迹
+        pyautogui.moveTo(x2, y2, duration=0.30) 
         pyautogui.mouseUp()
 
     def run(self):
@@ -140,17 +124,19 @@ class GameAutomator:
         time.sleep(3)
         
         while True:
-            # 1. 扫描当前屏幕
+            t0 = time.time()
             self.capture_and_recognize()
+            # print(f"识别耗时: {time.time()-t0:.2f}s")
             
-            # 2. 寻找一个解
+            # 打印一下当前的 grid (可选，用于调试)
+            # print(self.grid)
+
             move = self.find_first_move()
             
             if move:
-                # 3. 执行
                 self.execute_move(move[0], move[1])
-                # 4. 等待动画
-                time.sleep(0.3)
+                # 等待消除动画，防止识别到消除中的状态
+                time.sleep(0.1) 
             else:
                 print("未找到可消除的数字组合，程序结束。")
                 break
