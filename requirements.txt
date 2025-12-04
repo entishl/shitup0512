@@ -1,0 +1,5 @@
+ddddocr
+pyautogui
+numpy
+opencv-python
+Pillow
