@@ -392,9 +392,6 @@ class GameAutomator:
         print("2. 执行初始点击操作...")
         cx1, cy1 = self.config.get_point(2118, 2000)
         pyautogui.click(cx1, cy1)
-        time.sleep(0.1)
-        cx2, cy2 = self.config.get_point(1877, 1685)
-        pyautogui.click(cx2, cy2)
         
         print("3. 操作完成，再次等待 3 秒准备识图...")
         time.sleep(3)
