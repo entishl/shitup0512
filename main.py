@@ -10,21 +10,170 @@ if not hasattr(PIL.Image, 'ANTIALIAS'):
 import ddddocr
 from PIL import ImageGrab
 
-# ================= 配置区域 =================
+import ctypes
+from ctypes import wintypes
 
-# 游戏参数
-GRID_ROWS = 16
-GRID_COLS = 10
-TARGET_SUM = 10
+# ================= 窗口管理 =================
 
-# 坐标参数 (基准分辨率 3840 * 2160)
-START_X = 1455
-START_Y = 488
-STEP_X = 103.555
-STEP_Y = 103.466
+class WindowMgr:
+    def __init__(self):
+        self._user32 = ctypes.windll.user32
+        self._psapi = ctypes.windll.psapi
+        self._kernel32 = ctypes.windll.kernel32
+        # 设置 DPI 感知，确保在高 DPI 屏幕下获取真实的物理像素坐标
+        try:
+            self._user32.SetProcessDPIAware()
+        except AttributeError:
+            pass # 可能在非 Windows 或旧版 Windows 上
 
-# 识别区域大小
-CROP_SIZE = 50 
+    def find_window(self, potential_titles, target_process_name=None):
+        """根据标题和(可选)进程名寻找窗口句柄"""
+        target_hwnd = None
+        
+        def callback(hwnd, _):
+            nonlocal target_hwnd
+            if not self._user32.IsWindowVisible(hwnd):
+                return True
+            
+            length = self._user32.GetWindowTextLengthW(hwnd)
+            if length == 0:
+                return True
+                
+            buff = ctypes.create_unicode_buffer(length + 1)
+            self._user32.GetWindowTextW(hwnd, buff, length + 1)
+            title = buff.value
+            
+            if title in potential_titles:
+                if target_process_name:
+                    # 获取进程 ID
+                    pid = ctypes.c_ulong()
+                    self._user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                    
+                    # 尝试 1: 使用 GetModuleBaseName (需要较高权限)
+                    # PROCESS_QUERY_INFORMATION (0x0400) | PROCESS_VM_READ (0x0010)
+                    h_process = self._kernel32.OpenProcess(0x0410, False, pid)
+                    
+                    found_name = None
+                    
+                    if h_process:
+                        exe_buff = ctypes.create_unicode_buffer(1024)
+                        if self._psapi.GetModuleBaseNameW(h_process, None, exe_buff, 1024):
+                            found_name = exe_buff.value
+                        self._kernel32.CloseHandle(h_process)
+                    
+                    # 尝试 2: 如果失败，使用 GetProcessImageFileName (需要 PROCESS_QUERY_LIMITED_INFORMATION 0x1000)
+                    if not found_name:
+                        # PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+                        h_process = self._kernel32.OpenProcess(0x1000, False, pid)
+                        if h_process:
+                            exe_path_buff = ctypes.create_unicode_buffer(1024)
+                            if self._psapi.GetProcessImageFileNameW(h_process, exe_path_buff, 1024):
+                                full_path = exe_path_buff.value
+                                # 提取文件名
+                                found_name = full_path.split('\\')[-1]
+                            self._kernel32.CloseHandle(h_process)
+
+                    if found_name:
+                        print(f"找到窗口 '{title}' (PID: {pid.value})，进程名: {found_name}")
+                        if found_name.lower() == target_process_name.lower():
+                            target_hwnd = hwnd
+                            return False # Found matched
+                    else:
+                        print(f"找到窗口 '{title}' (PID: {pid.value})，但无法读取进程名 (可能需要管理员权限)")
+                
+                else:
+                    target_hwnd = hwnd
+                    return False # Stop enumeration
+            return True
+            
+        CMPFUNC = ctypes.WINFUNCTYPE(ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p)
+        self._user32.EnumWindows(CMPFUNC(callback), 0)
+        return target_hwnd
+
+    def get_window_rect(self, hwnd):
+        """获取窗口客户区（内容区）的屏幕坐标和尺寸"""
+        # 1. 检查是否最小化，如果是则还原
+        if self._user32.IsIconic(hwnd):
+            print("窗口处于最小化状态，正在还原...")
+            # SW_RESTORE = 9
+            self._user32.ShowWindow(hwnd, 9)
+            time.sleep(0.5) # 等待动画
+        
+        # 2. 尝试置顶窗口 (可选，防止被遮挡)
+        try:
+            self._user32.SetForegroundWindow(hwnd)
+            time.sleep(0.2)
+        except Exception:
+            pass
+
+        rect = wintypes.RECT()
+        self._user32.GetClientRect(hwnd, ctypes.byref(rect))
+        w = rect.right - rect.left
+        h = rect.bottom - rect.top
+        
+        # 将客户区左上角 (0,0) 转换为屏幕坐标
+        pt = wintypes.POINT()
+        pt.x = 0
+        pt.y = 0
+        self._user32.ClientToScreen(hwnd, ctypes.byref(pt))
+        
+        return pt.x, pt.y, w, h
+
+class GameConfig:
+    # 游戏逻辑常量
+    GRID_ROWS = 16
+    GRID_COLS = 10
+    TARGET_SUM = 10
+
+    # 基准分辨率 (4k 全屏 3840x2160)
+    REF_WIDTH = 3840
+    REF_HEIGHT = 2160 # 仅作参考，主要用宽度计算缩放
+    
+    # 基准参数 (在 4k 分辨率下的像素值)
+    REF_START_X = 1455
+    REF_START_Y = 488
+    REF_STEP_X = 103.555
+    REF_STEP_Y = 103.466
+    REF_CROP_SIZE = 50
+    REF_OFFSET_MAGNITUDE = 10
+    
+    def __init__(self, start_x_offset, start_y_offset, width, height):
+        if width <= 0 or height <= 0:
+            raise ValueError(f"窗口尺寸无效 ({width}x{height})，请检查窗口是否正常显示。")
+            
+        self.win_x = start_x_offset
+        self.win_y = start_y_offset
+        self.width = width
+        self.height = height
+        
+        # 计算缩放比例 (以宽度为基准)
+        # 假设游戏内容是固定的 16:9，如果窗口比例不同，可能会有黑边，
+        # 这里默认窗口内容即为游戏内容（或者无黑边）
+        self.scale = self.width / self.REF_WIDTH
+        
+        # 实时计算当前参数
+        self.step_x = self.REF_STEP_X * self.scale
+        self.step_y = self.REF_STEP_Y * self.scale
+        self.crop_size = int(self.REF_CROP_SIZE * self.scale)
+        self.offset_magnitude = self.REF_OFFSET_MAGNITUDE * self.scale
+        
+        # 起始点 (相对于屏幕绝对坐标)
+        self.start_x_screen = self.win_x + (self.REF_START_X * self.scale)
+        self.start_y_screen = self.win_y + (self.REF_START_Y * self.scale)
+
+        print(f"[配置] 窗口尺寸: {self.width}x{self.height} | 缩放比: {self.scale:.4f} | 内容区原点: ({self.win_x}, {self.win_y})")
+
+    def get_cell_center(self, row, col):
+        x = self.start_x_screen + col * self.step_x
+        y = self.start_y_screen + row * self.step_y
+        return int(round(x)), int(round(y))
+
+    def get_point(self, ref_x, ref_y):
+        """将 4k 基准坐标转换为当前屏幕绝对坐标"""
+        x = self.win_x + ref_x * self.scale
+        y = self.win_y + ref_y * self.scale
+        return int(round(x)), int(round(y))
+
 
 # PyAutoGUI 设置
 pyautogui.PAUSE = 0.005 
@@ -34,44 +183,66 @@ pyautogui.FAILSAFE = True
 
 class GameAutomator:
     def __init__(self):
-        self.grid = np.zeros((GRID_ROWS, GRID_COLS), dtype=int)
+        self.grid = np.zeros((GameConfig.GRID_ROWS, GameConfig.GRID_COLS), dtype=int)
         self.ocr = ddddocr.DdddOcr()
+        self.config = None
+        self._init_window()
         print("初始化完成，OCR模型已加载。")
+
+    def _init_window(self):
+        win_mgr = WindowMgr()
+        titles = ["NIKKE", "勝利女神：妮姬", "胜利女神：新的希望"]
+        # 精确查找 nikke.exe 进程的窗口，防止误判启动器
+        hwnd = win_mgr.find_window(titles, target_process_name="nikke.exe")
+        
+        if not hwnd:
+            raise Exception(f"未找到游戏窗口! 请确保游戏已启动，窗口标题在以下列表中: {titles}")
+            
+        x, y, w, h = win_mgr.get_window_rect(hwnd)
+        self.config = GameConfig(x, y, w, h)
 
     def get_cell_center(self, row, col):
         """计算第 row 行, col 列的屏幕绝对坐标"""
-        # 计算结果是浮点数
-        x = START_X + col * STEP_X
-        y = START_Y + row * STEP_Y
-        
-        # 关键修改：先 round 四舍五入，再转 int
-        return int(round(x)), int(round(y))
+        return self.config.get_cell_center(row, col)
 
     def capture_and_recognize(self):
         """全量扫描：截取屏幕并识别整个棋盘"""
         print("正在进行全屏扫描和识别...")
         t_start = time.time()
         
-        # 1. 计算截图区域 (注意转为 int)
-        x1 = int(round(START_X - STEP_X / 2))
-        y1 = int(round(START_Y - STEP_Y / 2))
-        width = int(round(GRID_COLS * STEP_X))
-        height = int(round(GRID_ROWS * STEP_Y))
+        # 1. 计算截图区域
+        # 基于配置计算覆盖整个网格的区域
+        # 左上角基准 (0,0) 的中心点
+        c00_x, c00_y = self.config.get_cell_center(0, 0)
+        
+        # 为了稳健，我们可以截取包含所有格子的矩形
+        # 左边 = 第0列中心 - 半个步长
+        # 上边 = 第0行中心 - 半个步长
+        x1 = int(round(c00_x - self.config.step_x / 2))
+        y1 = int(round(c00_y - self.config.step_y / 2))
+        
+        # 宽度 = 列数 * 步长
+        width = int(round(GameConfig.GRID_COLS * self.config.step_x))
+        height = int(round(GameConfig.GRID_ROWS * self.config.step_y))
         
         screenshot = ImageGrab.grab(bbox=(x1, y1, x1 + width, y1 + height))
         img_np = np.array(screenshot)
         img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
         
-        for r in range(GRID_ROWS):
-            for c in range(GRID_COLS):
-                # 2. 计算相对坐标 (关键修改：使用浮点运算后转整)
-                # local_cx 是相对于截图左上角的中心点 X
-                local_cx = int(round((c * STEP_X) + (STEP_X / 2)))
-                local_cy = int(round((r * STEP_Y) + (STEP_Y / 2)))
+        for r in range(GameConfig.GRID_ROWS):
+            for c in range(GameConfig.GRID_COLS):
+                # 2. 计算相对坐标
+                # 相对于截图区域左上角的坐标
+                # 绝对中心
+                abs_cx, abs_cy = self.config.get_cell_center(r, c)
                 
-                half_crop = CROP_SIZE // 2
+                # 相对中心 = 绝对中心 - 截图左上角
+                local_cx = abs_cx - x1
+                local_cy = abs_cy - y1
                 
-                # 确保切片不越界（增加一点鲁棒性）
+                half_crop = self.config.crop_size // 2
+                
+                # 确保切片不越界
                 y_min = max(0, local_cy - half_crop)
                 y_max = min(img_bgr.shape[0], local_cy + half_crop)
                 x_min = max(0, local_cx - half_crop)
@@ -100,8 +271,8 @@ class GameAutomator:
         """
         # 1. 获取所有有效数字的坐标点
         points = []
-        for r in range(GRID_ROWS):
-            for c in range(GRID_COLS):
+        for r in range(GameConfig.GRID_ROWS):
+            for c in range(GameConfig.GRID_COLS):
                 if self.grid[r][c] > 0:
                     points.append((r, c))
         
@@ -120,7 +291,7 @@ class GameAutomator:
                 sub_rect = self.grid[r_start:r_end+1, c_start:c_end+1]
                 current_sum = np.sum(sub_rect)
                 
-                if current_sum == TARGET_SUM:
+                if current_sum == GameConfig.TARGET_SUM:
                     return ((r1, c1), (r2, c2))
                     
         return None
@@ -144,7 +315,7 @@ class GameAutomator:
 
         # === 2. 动态计算偏移 (核心修正) ===
         # 偏移量 magnitude
-        OFFSET = 10 
+        OFFSET = self.config.offset_magnitude
         
         # X轴偏移逻辑：
         # 如果终点在起点右边 (c2 >= c1)，向右偏移 (+10)
@@ -190,12 +361,14 @@ class GameAutomator:
         time.sleep(3)
         
         print("2. 执行初始点击操作...")
-        pyautogui.click(1877, 1685)
+        cx1, cy1 = self.config.get_point(1877, 1685)
+        pyautogui.click(cx1, cy1)
         time.sleep(0.1)
-        pyautogui.click(2118, 2000)
+        cx2, cy2 = self.config.get_point(2118, 2000)
+        pyautogui.click(cx2, cy2)
         
-        print("3. 操作完成，再次等待 3 秒准备识图...")
-        time.sleep(3)
+        print("3. 操作完成，再次等待 2 秒准备识图...")
+        time.sleep(2)
         
         self.capture_and_recognize()
         
