@@ -389,42 +389,45 @@ class GameAutomator:
         print("1. 等待 3 秒...")
         time.sleep(3)
         
-        print("2. 执行初始点击操作...")
-        cx1, cy1 = self.config.get_point(2118, 2000)
-        pyautogui.click(cx1, cy1)
-        
-        print("3. 操作完成，再次等待 3 秒准备识图...")
-        time.sleep(3)
-        
-        self.capture_and_recognize()
-        
-        print("=== 开始自动消除循环 ===")
-        consecutive_failures = 0
-        
         while True:
-            move = self.find_first_move()
+            print("2. 执行初始点击操作...")
+            cx1, cy1 = self.config.get_point(2118, 2000)
+            pyautogui.click(cx1, cy1)
             
-            if move:
-                consecutive_failures = 0
-                self.execute_move(move[0], move[1])
-                self.update_internal_state(move[0], move[1])
-                time.sleep(0.15) 
+            print("3. 操作完成，再次等待 3 秒准备识图...")
+            time.sleep(3)
             
-            else:
-                print("内存中无解，重新扫描屏幕校准...")
-                consecutive_failures += 1
-                if consecutive_failures >= 3:
-                    print("连续多次扫描无解，程序退出。")
-                    break
-                    
-                self.capture_and_recognize()
+            self.capture_and_recognize()
+            
+            print("=== 开始自动消除循环 ===")
+            consecutive_failures = 0
+            
+            while True:
+                move = self.find_first_move()
                 
-                if self.find_first_move():
-                    print("发现新解，继续运行。")
-                    continue
+                if move:
+                    consecutive_failures = 0
+                    self.execute_move(move[0], move[1])
+                    self.update_internal_state(move[0], move[1])
+                    time.sleep(0.15) 
+                
                 else:
-                    print("确认无解，程序结束。")
-                    break
+                    print("内存中无解，重新扫描屏幕校准...")
+                    consecutive_failures += 1
+                    if consecutive_failures >= 3:
+                        print("连续多次扫描无解，等待 5 秒后重启循环...")
+                        time.sleep(5)
+                        break
+                        
+                    self.capture_and_recognize()
+                    
+                    if self.find_first_move():
+                        print("发现新解，继续运行。")
+                        continue
+                    else:
+                        print("确认无解，等待 5 秒后重启循环...")
+                        time.sleep(5)
+                        break
 
 if __name__ == "__main__":
     print("======= 注意 =======")
