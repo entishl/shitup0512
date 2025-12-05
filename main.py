@@ -207,8 +207,9 @@ pyautogui.FAILSAFE = True
 # ===========================================
 
 class GameAutomator:
-    def __init__(self, mode_key="1"):
+    def __init__(self, mode_key="1", loop_mode=False):
         self.mode_config = CONFIG_MODES.get(mode_key, CONFIG_MODES["1"])
+        self.loop_mode = loop_mode
         self.rows = self.mode_config["GRID_ROWS"]
         self.cols = self.mode_config["GRID_COLS"]
         
@@ -415,6 +416,10 @@ class GameAutomator:
                     print("内存中无解，重新扫描屏幕校准...")
                     consecutive_failures += 1
                     if consecutive_failures >= 3:
+                        if not self.loop_mode:
+                            print("连续多次扫描无解，程序退出。")
+                            return
+
                         print("连续多次扫描无解，等待 5 秒后重启循环...")
                         time.sleep(5)
                         break
@@ -425,6 +430,10 @@ class GameAutomator:
                         print("发现新解，继续运行。")
                         continue
                     else:
+                        if not self.loop_mode:
+                            print("确认无解，程序结束。")
+                            return
+
                         print("确认无解，等待 5 秒后重启循环...")
                         time.sleep(5)
                         break
@@ -445,8 +454,11 @@ if __name__ == "__main__":
     if choice not in ["1", "2"]:
         print("输入无效，默认使用模式 1")
         choice = "1"
+
+    loop_input = input("是否启用循环模式 (y/n)? [默认: n]: ").strip().lower()
+    enable_loop = (loop_input == 'y')
         
-    bot = GameAutomator(choice)
+    bot = GameAutomator(choice, enable_loop)
     try:
         bot.run()
     except KeyboardInterrupt:
