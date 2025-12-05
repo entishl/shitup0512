@@ -119,25 +119,42 @@ class WindowMgr:
         
         return pt.x, pt.y, w, h
 
+# ================= 游戏配置与常量 =================
+
+CONFIG_MODES = {
+    "1": {
+        "NAME": "10x16",
+        "GRID_ROWS": 16,
+        "GRID_COLS": 10,
+        "REF_START_X": 1455,
+        "REF_START_Y": 488,
+        "REF_STEP_X": 103.555,
+        "REF_STEP_Y": 103.466
+    },
+    "2": {
+        "NAME": "9x15",
+        "GRID_ROWS": 15,
+        "GRID_COLS": 9,
+        "REF_START_X": 1480,
+        "REF_START_Y": 495,
+        "REF_STEP_X": 110,
+        "REF_STEP_Y": 110
+    }
+}
+
 class GameConfig:
-    # 游戏逻辑常量
-    GRID_ROWS = 16
-    GRID_COLS = 10
+    # 游戏逻辑常量 (通用)
     TARGET_SUM = 10
 
     # 基准分辨率 (4k 全屏 3840x2160)
     REF_WIDTH = 3840
     REF_HEIGHT = 2160 # 仅作参考，主要用宽度计算缩放
     
-    # 基准参数 (在 4k 分辨率下的像素值)
-    REF_START_X = 1455
-    REF_START_Y = 488
-    REF_STEP_X = 103.555
-    REF_STEP_Y = 103.466
+    # 通用基准参数
     REF_CROP_SIZE = 50
     REF_OFFSET_MAGNITUDE = 10
     
-    def __init__(self, start_x_offset, start_y_offset, width, height):
+    def __init__(self, mode_config, start_x_offset, start_y_offset, width, height):
         if width <= 0 or height <= 0:
             raise ValueError(f"窗口尺寸无效 ({width}x{height})，请检查窗口是否正常显示。")
             
@@ -146,6 +163,14 @@ class GameConfig:
         self.width = width
         self.height = height
         
+        # 加载模式特定配置
+        self.GRID_ROWS = mode_config["GRID_ROWS"]
+        self.GRID_COLS = mode_config["GRID_COLS"]
+        self.REF_START_X = mode_config["REF_START_X"]
+        self.REF_START_Y = mode_config["REF_START_Y"]
+        self.REF_STEP_X = mode_config["REF_STEP_X"]
+        self.REF_STEP_Y = mode_config["REF_STEP_Y"]
+
         # 计算缩放比例 (以宽度为基准)
         # 假设游戏内容是固定的 16:9，如果窗口比例不同，可能会有黑边，
         # 这里默认窗口内容即为游戏内容（或者无黑边）
@@ -161,7 +186,7 @@ class GameConfig:
         self.start_x_screen = self.win_x + (self.REF_START_X * self.scale)
         self.start_y_screen = self.win_y + (self.REF_START_Y * self.scale)
 
-        print(f"[配置] 窗口尺寸: {self.width}x{self.height} | 缩放比: {self.scale:.4f} | 内容区原点: ({self.win_x}, {self.win_y})")
+        print(f"[配置] 模式: {mode_config['NAME']} | 窗口尺寸: {self.width}x{self.height} | 缩放比: {self.scale:.4f} | 内容区原点: ({self.win_x}, {self.win_y})")
 
     def get_cell_center(self, row, col):
         x = self.start_x_screen + col * self.step_x
@@ -182,8 +207,12 @@ pyautogui.FAILSAFE = True
 # ===========================================
 
 class GameAutomator:
-    def __init__(self):
-        self.grid = np.zeros((GameConfig.GRID_ROWS, GameConfig.GRID_COLS), dtype=int)
+    def __init__(self, mode_key="1"):
+        self.mode_config = CONFIG_MODES.get(mode_key, CONFIG_MODES["1"])
+        self.rows = self.mode_config["GRID_ROWS"]
+        self.cols = self.mode_config["GRID_COLS"]
+        
+        self.grid = np.zeros((self.rows, self.cols), dtype=int)
         self.ocr = ddddocr.DdddOcr()
         self.config = None
         self._init_window()
@@ -199,7 +228,7 @@ class GameAutomator:
             raise Exception(f"未找到游戏窗口! 请确保游戏已启动，窗口标题在以下列表中: {titles}")
             
         x, y, w, h = win_mgr.get_window_rect(hwnd)
-        self.config = GameConfig(x, y, w, h)
+        self.config = GameConfig(self.mode_config, x, y, w, h)
 
     def get_cell_center(self, row, col):
         """计算第 row 行, col 列的屏幕绝对坐标"""
@@ -222,15 +251,15 @@ class GameAutomator:
         y1 = int(round(c00_y - self.config.step_y / 2))
         
         # 宽度 = 列数 * 步长
-        width = int(round(GameConfig.GRID_COLS * self.config.step_x))
-        height = int(round(GameConfig.GRID_ROWS * self.config.step_y))
+        width = int(round(self.cols * self.config.step_x))
+        height = int(round(self.rows * self.config.step_y))
         
         screenshot = ImageGrab.grab(bbox=(x1, y1, x1 + width, y1 + height))
         img_np = np.array(screenshot)
         img_bgr = cv2.cvtColor(img_np, cv2.COLOR_RGB2BGR)
         
-        for r in range(GameConfig.GRID_ROWS):
-            for c in range(GameConfig.GRID_COLS):
+        for r in range(self.rows):
+            for c in range(self.cols):
                 # 2. 计算相对坐标
                 # 相对于截图区域左上角的坐标
                 # 绝对中心
@@ -271,8 +300,8 @@ class GameAutomator:
         """
         # 1. 获取所有有效数字的坐标点
         points = []
-        for r in range(GameConfig.GRID_ROWS):
-            for c in range(GameConfig.GRID_COLS):
+        for r in range(self.rows):
+            for c in range(self.cols):
                 if self.grid[r][c] > 0:
                     points.append((r, c))
         
@@ -361,14 +390,14 @@ class GameAutomator:
         time.sleep(3)
         
         print("2. 执行初始点击操作...")
-        cx1, cy1 = self.config.get_point(1877, 1685)
+        cx1, cy1 = self.config.get_point(2118, 2000)
         pyautogui.click(cx1, cy1)
         time.sleep(0.1)
-        cx2, cy2 = self.config.get_point(2118, 2000)
+        cx2, cy2 = self.config.get_point(1877, 1685)
         pyautogui.click(cx2, cy2)
         
-        print("3. 操作完成，再次等待 2 秒准备识图...")
-        time.sleep(2)
+        print("3. 操作完成，再次等待 3 秒准备识图...")
+        time.sleep(3)
         
         self.capture_and_recognize()
         
@@ -401,7 +430,23 @@ class GameAutomator:
                     break
 
 if __name__ == "__main__":
-    bot = GameAutomator()
+    print("======= 注意 =======")
+    print("请确保游戏在16:9下运行，本程序不支持其它比例")
+    print("程序会产生大量拖拽动作，建议全屏模式下运行，或让游戏窗口尽量大，覆盖你的桌面文件")
+    print("请右键选择管理员模式运行此程序，否则无法操作NIKKE")
+    print("如果需要停止，将鼠标快速向左上角滑动")
+    print("请先进入一次小游戏，暂停后【快速退出】，结算当次游戏后再执行程序")
+    print("======= 注意 =======")
+    print("请选择游戏模式:")
+    print("1. 10x16 (默认)")
+    print("2. 9x15")
+    choice = input("请输入序号 (1/2): ").strip()
+    
+    if choice not in ["1", "2"]:
+        print("输入无效，默认使用模式 1")
+        choice = "1"
+        
+    bot = GameAutomator(choice)
     try:
         bot.run()
     except KeyboardInterrupt:
