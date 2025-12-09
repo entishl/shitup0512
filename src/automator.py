@@ -173,44 +173,44 @@ class GameAutomator:
             cx1, cy1 = self.config.get_point(2118, 2000)
             pyautogui.click(cx1, cy1)
             
-            print("3. 操作完成，再次等待 3 秒准备识图...")
-            time.sleep(3)
+            print("3. 操作完成，再次等待 5 秒准备识图...")
+            time.sleep(5)
             
             self.capture_and_recognize()
             
-            print("=== 开始自动消除循环 ===")
-            consecutive_failures = 0
+            # --- Simple Solver Benchmark ---
+            print("=== 正在运行【基准算法】计算当前分数 ===")
+            simple_score = self.solver.calculate_simple_score(self.grid)
+            print(f">>> [基准贪心算法] 理论最高得分: {simple_score}")
             
-            while True:
-                move = self.solver.find_global_optimal_move(self.grid)                
-                if move:
-                    consecutive_failures = 0
-                    self.execute_move(move[0], move[1])
-                    self.update_internal_state(move[0], move[1])
-                    time.sleep(0.15) 
-                
-                else:
-                    print("内存中无解，重新扫描屏幕校准...")
-                    consecutive_failures += 1
-                    if consecutive_failures >= 3:
-                        if not self.loop_mode:
-                            print("连续多次扫描无解，程序退出。")
-                            return
-
-                        print("连续多次扫描无解，等待 5 秒后重启循环...")
-                        time.sleep(5)
-                        break
-                        
-                    self.capture_and_recognize()
+            # --- God Brain V7 Integration ---
+            print("=== 正在调用神之大脑进行演算 (80s) ===")
+            path = self.solver.solve_hydra(self.grid, time_limit=50, threads=8)
+            
+            if path:
+                print(f"=== 演算完成，准备执行 {len(path)} 步操作 ===")
+                for i, move in enumerate(path):
+                    r1, c1, r2, c2 = move
+                    # execute_move expects start_pos, end_pos tuples
+                    self.execute_move((r1, c1), (r2, c2))
                     
-                    if self.solver.find_first_move(self.grid):
-                        print("发现新解，继续运行。")
-                        continue
-                    else:
-                        if not self.loop_mode:
-                            print("确认无解，程序结束。")
-                            return
+                    # Update internal state (optional but good for visuals if we had a UI)
+                    self.update_internal_state((r1, c1), (r2, c2))
+                    
+                    # Small delay between moves to prevent input flooding
+                    time.sleep(0.02)
+                    
+                    if i % 10 == 0:
+                        print(f"进度: {i}/{len(path)}")
+                
+                print(">>> 本轮执行完毕 <<<")
+            else:
+                print("!!! 神之大脑未找到解 !!!")
 
-                        print("确认无解，等待 5 秒后重启循环...")
-                        time.sleep(5)
-                        break
+            if not self.loop_mode:
+                print("程序结束。")
+                return
+
+            print("等待 5 秒后重启循环...")
+            time.sleep(5)
+
