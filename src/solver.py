@@ -7,7 +7,8 @@ from .config import GameConfig
 # =============================================================================
 # 配置参数 - 可在此处修改
 # =============================================================================
-TIME_LIMIT_SECONDS = 40  # 求解器时间限制（秒）
+TIME_LIMIT_PHASE1 = 25  # 第一阶段时间限制（约束模式，秒）
+TIME_LIMIT_PHASE2 = 30  # 第二阶段时间限制（普通模式，秒）
 
 # --- Numba Check ---
 try:
@@ -74,6 +75,91 @@ def _build_active_indices(map_data, size):
             result[idx] = i
             idx += 1
     return result
+
+@njit(fastmath=True, nogil=True, cache=True)
+def _check_solvability(map_data, vals, rows, cols):
+    """
+    检查棋盘是否理论可解（大数吞噬模拟）。
+    
+    基于数论：
+    1. 总和必须能被 10 整除
+    2. 大数必须有足够的小数来配对（9 需要 1，8 需要 2 等）
+    
+    Args:
+        map_data: 1D array, 1 表示该位置有数字，0 表示已消除
+        vals: 1D array, 每个位置的数字值 (1-9)
+        rows, cols: 棋盘尺寸
+    
+    Returns:
+        bool: True 表示可解，False 表示不可解
+    """
+    # 统计每个数字的出现次数 (1-9)
+    count = np.zeros(10, dtype=np.int32)  # count[0] 不用
+    total_sum = 0
+    
+    for i in range(rows * cols):
+        if map_data[i] == 1:
+            v = vals[i]
+            count[v] += 1
+            total_sum += v
+    
+    # 检查 1：总和能被 10 整除
+    if total_sum % 10 != 0:
+        return False
+    
+    # 检查 2：大数吞噬模拟
+    # 创建库存副本
+    stock = count.copy()
+    
+    # 处理 9：每个 9 必须消耗一个 1
+    if stock[1] < stock[9]:
+        return False
+    stock[1] -= stock[9]
+    stock[9] = 0
+    
+    # 处理 8：每个 8 需要补 2 (优先用 2，否则用两个 1)
+    need_8 = stock[8]
+    use_2 = min(stock[2], need_8)
+    stock[2] -= use_2
+    remaining_8 = need_8 - use_2
+    need_1_for_8 = remaining_8 * 2
+    if stock[1] < need_1_for_8:
+        return False
+    stock[1] -= need_1_for_8
+    stock[8] = 0
+    
+    # 处理 7：每个 7 需要补 3 (优先 3，然后 2+1，最后 1+1+1)
+    for _ in range(stock[7]):
+        if stock[3] >= 1:
+            stock[3] -= 1
+        elif stock[2] >= 1 and stock[1] >= 1:
+            stock[2] -= 1
+            stock[1] -= 1
+        elif stock[1] >= 3:
+            stock[1] -= 3
+        else:
+            return False
+    stock[7] = 0
+    
+    # 处理 6：每个 6 需要补 4 (优先 4，然后 3+1，2+2，2+1+1，1+1+1+1)
+    for _ in range(stock[6]):
+        if stock[4] >= 1:
+            stock[4] -= 1
+        elif stock[3] >= 1 and stock[1] >= 1:
+            stock[3] -= 1
+            stock[1] -= 1
+        elif stock[2] >= 2:
+            stock[2] -= 2
+        elif stock[2] >= 1 and stock[1] >= 2:
+            stock[2] -= 1
+            stock[1] -= 2
+        elif stock[1] >= 4:
+            stock[1] -= 4
+        else:
+            return False
+    stock[6] = 0
+    
+    return True
 
 @njit(fastmath=True, nogil=True)
 def _evaluate_state(score, map_data, rows, cols, w_island, w_fragment, remaining_count=-1):
@@ -261,7 +347,14 @@ def _unroll_path_chain(path_chain):
     result.reverse()  # Reverse since we built it backwards
     return result
 
-def _run_core_search_logic(start_map, vals_arr, rows, cols, beam_width, search_mode, start_score, start_path, weights, max_depth=160):
+def _run_core_search_logic(start_map, vals_arr, rows, cols, beam_width, search_mode, start_score, start_path, weights, max_depth=160, constrained=False):
+    """
+    Core beam search logic.
+    
+    Args:
+        constrained: If True, only consider moves that maintain solvability.
+                    Used in first phase to ensure shuffle always has a chance.
+    """
     w_island = weights.get('w_island', 0)
     w_fragment = weights.get('w_fragment', 0)
     
@@ -334,6 +427,12 @@ def _run_core_search_logic(start_map, vals_arr, rows, cols, beam_width, search_m
             for move in top_moves:
                 r1, c1, r2, c2, count = move
                 new_map = _apply_move_fast(state['map'], (r1, c1, r2, c2), cols)
+                
+                # === 可解性约束：跳过破坏可解性的移动 ===
+                if constrained:
+                    if not _check_solvability(new_map, vals_arr, rows, cols):
+                        continue  # 跳过此移动
+                
                 new_score = state['score'] + count
                 # O(1) remaining count: parent_remaining - cleared_count
                 new_remaining = parent_remaining - count
@@ -341,6 +440,7 @@ def _run_core_search_logic(start_map, vals_arr, rows, cols, beam_width, search_m
                 # O(1) path extension using tuple chain (cons-list pattern)
                 new_path_chain = ((r1, c1, r2, c2), state['path'])
                 next_candidates.append({'map': new_map, 'path': new_path_chain, 'score': new_score, 'h_score': h, 'remaining': new_remaining})
+
 
         if not found_any_move or not next_candidates: break
         
@@ -373,7 +473,7 @@ def _run_core_search_logic(start_map, vals_arr, rows, cols, beam_width, search_m
     return best_state_in_run
 
 def _solve_process_hydra(args):
-    map_list, val_list, rows, cols, beam_width, mode, seed, time_limit, personality = args
+    map_list, val_list, rows, cols, beam_width, mode, seed, time_limit, personality, constrained = args
     safe_seed = seed % (2**32 - 1)
     np.random.seed(safe_seed)
     random.seed(safe_seed)
@@ -389,11 +489,11 @@ def _solve_process_hydra(args):
     if mode == 'god':
         p1_weights = weights.copy()
         if p1_weights['w_island'] > 0: p1_weights['w_island'] *= 0.5 
-        p1 = _run_core_search_logic(initial_map_arr, vals_arr, rows, cols, beam_width, 'classic', 0, [], p1_weights)
-        p2 = _run_core_search_logic(p1['map'], vals_arr, rows, cols, beam_width, 'omni', p1['score'], p1['path'], weights)
+        p1 = _run_core_search_logic(initial_map_arr, vals_arr, rows, cols, beam_width, 'classic', 0, [], p1_weights, constrained=constrained)
+        p2 = _run_core_search_logic(p1['map'], vals_arr, rows, cols, beam_width, 'omni', p1['score'], p1['path'], weights, constrained=constrained)
         base_state = p2
     else:
-        base_state = _run_core_search_logic(initial_map_arr, vals_arr, rows, cols, beam_width, mode, 0, [], weights)
+        base_state = _run_core_search_logic(initial_map_arr, vals_arr, rows, cols, beam_width, mode, 0, [], weights, constrained=constrained)
         
     best_final_state = base_state
     
@@ -444,7 +544,7 @@ def _solve_process_hydra(args):
         
         repaired_state = _run_core_search_logic(
             temp_map, vals_arr, rows, cols, huge_beam, 'omni', 
-            prefix_score, prefix_path, repair_weights
+            prefix_score, prefix_path, repair_weights, constrained=constrained
         )
         
         if repaired_state['score'] > best_final_state['score']:
@@ -520,7 +620,7 @@ class Solver:
         return _solve_greedy_numba(map_arr, val_arr, self.rows, self.cols)
 
 
-    def solve_hydra(self, grid, time_limit=TIME_LIMIT_SECONDS, threads=8):
+    def solve_hydra(self, grid, time_limit=TIME_LIMIT_PHASE2, threads=8):
   
         print(f">> [Solver] Starting Hydra Engine (Limit: {time_limit}s, Threads: {threads})")
         
@@ -552,7 +652,64 @@ class Solver:
                 else:
                     personality['w_island'] = 80; personality['w_fragment'] = 1.0; personality['role'] = 'Heavy'
                 
-                args = (map_list, val_list, self.rows, self.cols, beam_width, mode, base_seed + i, time_limit, personality)
+                args = (map_list, val_list, self.rows, self.cols, beam_width, mode, base_seed + i, time_limit, personality, False)
+                futures.append(executor.submit(_solve_process_hydra, args))
+            
+            best_record = None
+            best_score = -1
+            
+            for future in as_completed(futures):
+                try:
+                    res = future.result()
+                    print(f"   [Worker-{res['worker_id'] % 100}] Score: {res['score']} (Iter: {res['iterations']})")
+                    if res['score'] > best_score:
+                        best_score = res['score']
+                        best_record = res
+                except Exception as e:
+                    print(f"   [Worker Error] {e}")
+
+        if best_record:
+            print(f">> [Solver] Best Solution Found: Score {best_score} by {best_record['personality']['role']}")
+            return best_record['path'] # Returns list of [r1, c1, r2, c2]
+        
+        return None
+
+    def solve_hydra_constrained(self, grid, time_limit=TIME_LIMIT_PHASE1, threads=8):
+        """
+        第一阶段求解：保证每一步后棋盘仍理论可解。
+        用于重排前的消除，确保无论在哪一步卡住，重排后依然有满分机会。
+        """
+        print(f">> [Solver] Starting Hydra Engine (CONSTRAINED Mode, Limit: {time_limit}s, Threads: {threads})")
+        
+        # Flatten grid for processing
+        map_list = []
+        val_list = []
+        for r in range(self.rows):
+            for c in range(self.cols):
+                val = grid[r][c]
+                val_list.append(val)
+                map_list.append(1 if val > 0 else 0)
+        
+        beam_width = 30 # Default beam width
+        mode = 'god'   # God mode (Classic -> Omni)
+        
+        futures = []
+        
+        base_seed = random.randint(0, 10000)
+        
+        with ProcessPoolExecutor(max_workers=threads) as executor:
+            for i in range(threads):
+                personality = {'name': f"Core-{i}"}
+                # Distribution of personalities
+                if i < 2:
+                    personality['w_island'] = 50; personality['w_fragment'] = 2; personality['role'] = 'Balancer'
+                elif i < 6:
+                    personality['w_island'] = 24; personality['w_fragment'] = 0.5; personality['role'] = 'Striker'
+                else:
+                    personality['w_island'] = 80; personality['w_fragment'] = 1.0; personality['role'] = 'Heavy'
+                
+                # 传入 constrained=True
+                args = (map_list, val_list, self.rows, self.cols, beam_width, mode, base_seed + i, time_limit, personality, True)
                 futures.append(executor.submit(_solve_process_hydra, args))
             
             best_record = None

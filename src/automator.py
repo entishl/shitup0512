@@ -84,7 +84,7 @@ if not hasattr(PIL.Image, 'ANTIALIAS'):
 from .config import CONFIG_MODES, GameConfig
 from .window import WindowMgr
 from .ocr import OCR
-from .solver import Solver, TIME_LIMIT_SECONDS
+from .solver import Solver, TIME_LIMIT_PHASE1, TIME_LIMIT_PHASE2
 
 # PyAutoGUI 设置
 pyautogui.PAUSE = 0.005 
@@ -366,8 +366,9 @@ class GameAutomator:
             print(f">>> [基准贪心算法] 理论最高得分: {simple_score}")
             
             # --- God Brain V7 Integration ---
-            print(f"=== 正在调用神之大脑进行演算 ({TIME_LIMIT_SECONDS}s) ===")
-            path = self.solver.solve_hydra(self.grid)
+            # 第一阶段：使用约束模式，确保每一步后棋盘仍然理论可解
+            print(f"=== 正在调用神之大脑进行演算 [约束模式] ({TIME_LIMIT_PHASE1}s) ===")
+            path = self.solver.solve_hydra_constrained(self.grid)
             
             if path:
                 print(f"=== 演算完成，准备执行 {len(path)} 步操作 ===")
@@ -400,7 +401,8 @@ class GameAutomator:
             print("3. 重新进行识图...")
             self.capture_and_recognize()
             
-            print(f"4. 再次调用神之大脑进行演算 ({TIME_LIMIT_SECONDS}s)...")
+            # 第二阶段：使用普通模式（无约束），因为已经是最后一次机会
+            print(f"4. 再次调用神之大脑进行演算 [普通模式] ({TIME_LIMIT_PHASE2}s)...")
             path_round2 = self.solver.solve_hydra(self.grid)
             
             if path_round2:
