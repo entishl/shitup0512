@@ -4,6 +4,71 @@ import cv2
 import pyautogui
 from PIL import ImageGrab
 import PIL.Image
+import ctypes
+
+# === Windows 底层键盘输入 (用于游戏) ===
+SendInput = ctypes.windll.user32.SendInput
+
+# C struct 定义
+PUL = ctypes.POINTER(ctypes.c_ulong)
+
+class KeyBdInput(ctypes.Structure):
+    _fields_ = [("wVk", ctypes.c_ushort),
+                ("wScan", ctypes.c_ushort),
+                ("dwFlags", ctypes.c_ulong),
+                ("time", ctypes.c_ulong),
+                ("dwExtraInfo", PUL)]
+
+class HardwareInput(ctypes.Structure):
+    _fields_ = [("uMsg", ctypes.c_ulong),
+                ("wParamL", ctypes.c_short),
+                ("wParamH", ctypes.c_ushort)]
+
+class MouseInput(ctypes.Structure):
+    _fields_ = [("dx", ctypes.c_long),
+                ("dy", ctypes.c_long),
+                ("mouseData", ctypes.c_ulong),
+                ("dwFlags", ctypes.c_ulong),
+                ("time", ctypes.c_ulong),
+                ("dwExtraInfo", PUL)]
+
+class Input_I(ctypes.Union):
+    _fields_ = [("ki", KeyBdInput),
+                ("mi", MouseInput),
+                ("hi", HardwareInput)]
+
+class Input(ctypes.Structure):
+    _fields_ = [("type", ctypes.c_ulong),
+                ("ii", Input_I)]
+
+# DirectInput 扫描码 (用于游戏)
+# W 键的扫描码是 0x11
+DIK_W = 0x11
+
+KEYEVENTF_SCANCODE = 0x0008
+KEYEVENTF_KEYUP = 0x0002
+
+def press_key_direct(scan_code):
+    """使用 DirectInput 扫描码按下按键"""
+    extra = ctypes.c_ulong(0)
+    ii_ = Input_I()
+    ii_.ki = KeyBdInput(0, scan_code, KEYEVENTF_SCANCODE, 0, ctypes.pointer(extra))
+    x = Input(ctypes.c_ulong(1), ii_)
+    SendInput(1, ctypes.pointer(x), ctypes.sizeof(x))
+
+def release_key_direct(scan_code):
+    """使用 DirectInput 扫描码释放按键"""
+    extra = ctypes.c_ulong(0)
+    ii_ = Input_I()
+    ii_.ki = KeyBdInput(0, scan_code, KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP, 0, ctypes.pointer(extra))
+    x = Input(ctypes.c_ulong(1), ii_)
+    SendInput(1, ctypes.pointer(x), ctypes.sizeof(x))
+
+def press_w_key():
+    """模拟按下并释放 W 键 (游戏兼容)"""
+    press_key_direct(DIK_W)
+    time.sleep(0.05)  # 短暂按住
+    release_key_direct(DIK_W)
 
 # Patch for older PIL versions
 if not hasattr(PIL.Image, 'ANTIALIAS'):
@@ -102,7 +167,10 @@ class GameAutomator:
                 else:
                     self.grid[r][c] = 0
         
-        print(f"扫描完成，耗时: {time.time() - t_start:.2f}s")
+        # 统计识别到的非零数字个数
+        recognized_count = np.count_nonzero(self.grid)
+        print(f"扫描完成，耗时: {time.time() - t_start:.2f}s，识别到 {recognized_count} 个数字")
+        return recognized_count
    
     def execute_move(self, start_pos, end_pos):
         """执行鼠标拖拽，根据移动向量动态计算偏移方向"""
@@ -175,7 +243,16 @@ class GameAutomator:
             print("3. 操作完成，再次等待 5 秒准备识图...")
             time.sleep(5)
             
-            self.capture_and_recognize()
+            recognized_count = self.capture_and_recognize()
+            
+            # === OCR 验证：检查识别到的数字个数 ===
+            expected_counts = [160, 135]  # 16x10 或 15x9 网格
+            if recognized_count not in expected_counts:
+                raise RuntimeError(
+                    f"OCR 识别失败！识别到 {recognized_count} 个数字，"
+                    f"但预期应为 {expected_counts} 之一。请检查游戏窗口是否正确显示。"
+                )
+            print(f"OCR 验证通过：识别到 {recognized_count} 个数字")
             
             # --- Simple Solver Benchmark ---
             print("=== 正在运行【基准算法】计算当前分数 ===")
@@ -205,6 +282,37 @@ class GameAutomator:
                 print(">>> 本轮执行完毕 <<<")
             else:
                 print("!!! 神之大脑未找到解 !!!")
+
+            # === 第二轮操作：按下W键，重新识图并计算 ===
+            print("=== 开始第二轮操作 ===")
+            print("1. 模拟按下键盘 'W' 键...")
+            press_w_key()
+            
+            print("2. 等待 2 秒...")
+            time.sleep(2)
+            
+            print("3. 重新进行识图...")
+            self.capture_and_recognize()
+            
+            print(f"4. 再次调用神之大脑进行演算 ({TIME_LIMIT_SECONDS}s)...")
+            path_round2 = self.solver.solve_hydra(self.grid)
+            
+            if path_round2:
+                print(f"=== 第二轮演算完成，准备执行 {len(path_round2)} 步操作 ===")
+                for i, move in enumerate(path_round2):
+                    r1, c1, r2, c2 = move
+                    self.execute_move((r1, c1), (r2, c2))
+                    self.update_internal_state((r1, c1), (r2, c2))
+                    time.sleep(0.02)
+                    
+                    if i % 10 == 0:
+                        print(f"进度: {i}/{len(path_round2)}")
+                
+                print(">>> 第二轮执行完毕 <<<")
+            else:
+                print("!!! 第二轮：神之大脑未找到解 !!!")
+            
+            print("=== 全部操作完成 ===")
 
             if not self.loop_mode:
                 print("程序结束。")
