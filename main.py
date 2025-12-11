@@ -1,7 +1,10 @@
 import sys
 from src.automator import GameAutomator
 
+import multiprocessing
+
 if __name__ == "__main__":
+    multiprocessing.freeze_support()
     print("======= 注意 =======")
     print("请确保游戏在16:9下运行，本程序不支持其它比例")
     print("程序会产生大量拖拽动作，建议全屏模式下运行，或让游戏窗口尽量大，覆盖你的桌面文件")

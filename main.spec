@@ -1,14 +1,16 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_all
-datas, binaries, hiddenimports = collect_all('ddddocr')
 
+
+from PyInstaller.utils.hooks import collect_data_files
+
+datas = collect_data_files('ddddocr')
 
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=binaries,
+    binaries=[],
     datas=datas,
-    hiddenimports=hiddenimports,
+    hiddenimports=[],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
