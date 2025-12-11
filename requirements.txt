@@ -3,3 +3,4 @@ pyautogui
 numpy
 opencv-python
 Pillow
+pyinstaller
