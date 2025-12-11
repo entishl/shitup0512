@@ -42,8 +42,9 @@ class Input(ctypes.Structure):
                 ("ii", Input_I)]
 
 # DirectInput 扫描码 (用于游戏)
-# W 键的扫描码是 0x11
+# W 键的扫描码是 0x11, ESC 键的扫描码是 0x01
 DIK_W = 0x11
+DIK_ESCAPE = 0x01
 
 KEYEVENTF_SCANCODE = 0x0008
 KEYEVENTF_KEYUP = 0x0002
@@ -69,6 +70,12 @@ def press_w_key():
     press_key_direct(DIK_W)
     time.sleep(0.05)  # 短暂按住
     release_key_direct(DIK_W)
+
+def press_esc_key():
+    """模拟按下并释放 ESC 键 (游戏兼容)"""
+    press_key_direct(DIK_ESCAPE)
+    time.sleep(0.05)  # 短暂按住
+    release_key_direct(DIK_ESCAPE)
 
 # Patch for older PIL versions
 if not hasattr(PIL.Image, 'ANTIALIAS'):
@@ -171,6 +178,84 @@ class GameAutomator:
         recognized_count = np.count_nonzero(self.grid)
         print(f"扫描完成，耗时: {time.time() - t_start:.2f}s，识别到 {recognized_count} 个数字")
         return recognized_count
+
+    def validate_grid_solvability(self):
+        """
+        数论验证：检查棋盘是否可解。
+        1. 检查所有数字的总和是否能被10整除
+        2. 大数吞噬检查（贪心消耗模拟）
+        
+        Returns:
+            tuple: (is_valid, error_message) - is_valid 为 True 表示验证通过
+        """
+        # 统计每个数字的出现次数 (1-9)
+        count = {}
+        for i in range(1, 10):
+            count[i] = np.count_nonzero(self.grid == i)
+        
+        # === 检查 1：总和是否能被 10 整除 ===
+        total_sum = sum(i * count[i] for i in range(1, 10))
+        if total_sum % 10 != 0:
+            return False, f"数论验证失败：数字总和 {total_sum} 无法被 10 整除"
+        
+        print(f"数论检查 1/2：总和 = {total_sum}，能被 10 整除 ✓")
+        
+        # === 检查 2：大数吞噬模拟 ===
+        # 创建库存副本进行模拟
+        stock = count.copy()
+        
+        # 处理 9：每个 9 必须消耗一个 1
+        if stock[1] < stock[9]:
+            return False, f"大数吞噬失败：9 需要 {stock[9]} 个 1，但只有 {stock[1]} 个"
+        stock[1] -= stock[9]
+        stock[9] = 0
+        
+        # 处理 8：每个 8 需要补 2 (优先用 2，否则用两个 1)
+        need_8 = stock[8]
+        # 优先消耗 2
+        use_2 = min(stock[2], need_8)
+        stock[2] -= use_2
+        remaining_8 = need_8 - use_2
+        # 剩余用两个 1
+        need_1_for_8 = remaining_8 * 2
+        if stock[1] < need_1_for_8:
+            return False, f"大数吞噬失败：8 还需要 {need_1_for_8} 个 1，但只有 {stock[1]} 个"
+        stock[1] -= need_1_for_8
+        stock[8] = 0
+        
+        # 处理 7：每个 7 需要补 3 (优先 3，然后 2+1，最后 1+1+1)
+        for _ in range(stock[7]):
+            if stock[3] >= 1:
+                stock[3] -= 1
+            elif stock[2] >= 1 and stock[1] >= 1:
+                stock[2] -= 1
+                stock[1] -= 1
+            elif stock[1] >= 3:
+                stock[1] -= 3
+            else:
+                return False, f"大数吞噬失败：无法为 7 凑够补数 3"
+        stock[7] = 0
+        
+        # 处理 6：每个 6 需要补 4 (优先 4，然后 3+1，2+2，2+1+1，1+1+1+1)
+        for _ in range(stock[6]):
+            if stock[4] >= 1:
+                stock[4] -= 1
+            elif stock[3] >= 1 and stock[1] >= 1:
+                stock[3] -= 1
+                stock[1] -= 1
+            elif stock[2] >= 2:
+                stock[2] -= 2
+            elif stock[2] >= 1 and stock[1] >= 2:
+                stock[2] -= 1
+                stock[1] -= 2
+            elif stock[1] >= 4:
+                stock[1] -= 4
+            else:
+                return False, f"大数吞噬失败：无法为 6 凑够补数 4"
+        stock[6] = 0
+        
+        print(f"数论检查 2/2：大数吞噬模拟通过 ✓")
+        return True, ""
    
     def execute_move(self, start_pos, end_pos):
         """执行鼠标拖拽，根据移动向量动态计算偏移方向"""
@@ -235,13 +320,17 @@ class GameAutomator:
         print("1. 等待 3 秒...")
         time.sleep(3)
         
+        is_first_run = True  # 用于区分初始化和重试
+        
         while True:
             print("2. 执行初始点击操作...")
             cx1, cy1 = self.config.get_point(2118, 2000)
             pyautogui.click(cx1, cy1)
             
-            print("3. 操作完成，再次等待 5 秒准备识图...")
-            time.sleep(5)
+            # 初始化等待5秒，重试只等待1秒
+            wait_time = 5 if is_first_run else 1
+            print(f"3. 操作完成，等待 {wait_time} 秒准备识图...")
+            time.sleep(wait_time)
             
             recognized_count = self.capture_and_recognize()
             
@@ -253,6 +342,23 @@ class GameAutomator:
                     f"但预期应为 {expected_counts} 之一。请检查游戏窗口是否正确显示。"
                 )
             print(f"OCR 验证通过：识别到 {recognized_count} 个数字")
+            
+            # === 数论验证：检查棋盘是否可解 ===
+            is_valid, error_msg = self.validate_grid_solvability()
+            if not is_valid:
+                print(f"!!! {error_msg} !!!")
+                print("正在执行恢复操作：按下 ESC 键...")
+                press_esc_key()
+                time.sleep(1)
+                print("点击重试按钮 (2100, 1325)...")
+                retry_x, retry_y = self.config.get_point(2100, 1325)
+                pyautogui.click(retry_x, retry_y)
+                print("等待 3 秒后重新开始...")
+                time.sleep(3)
+                is_first_run = False  # 重试不再是首次运行
+                continue  # 重新开始循环
+            print("数论验证通过 ✓")
+            is_first_run = False  # 验证通过后，后续循环不再是首次运行
             
             # --- Simple Solver Benchmark ---
             print("=== 正在运行【基准算法】计算当前分数 ===")
