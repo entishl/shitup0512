@@ -12,7 +12,7 @@ if not hasattr(PIL.Image, 'ANTIALIAS'):
 from .config import CONFIG_MODES, GameConfig
 from .window import WindowMgr
 from .ocr import OCR
-from .solver import Solver
+from .solver import Solver, TIME_LIMIT_SECONDS
 
 # PyAutoGUI 设置
 pyautogui.PAUSE = 0.005 
@@ -117,9 +117,7 @@ class GameAutomator:
         dist_c = abs(c2 - c1)
         max_steps = max(dist_r, dist_c)
         
-        move_duration = 0.1 + max_steps * 0.12 
-        if move_duration <= 0:
-            move_duration = 0.20
+        move_duration = 0.22
 
         # === 2. 动态计算偏移 (核心修正) ===
         # 偏移量 magnitude
@@ -150,7 +148,8 @@ class GameAutomator:
         
         pyautogui.moveTo(x1, y1)
         pyautogui.mouseDown()
-        pyautogui.moveTo(target_x, target_y, duration=move_duration) 
+        pyautogui.moveTo(target_x, target_y, duration=move_duration)
+        time.sleep(0.1)  # 在终点停滞0.1秒后再松开鼠标
         pyautogui.mouseUp()
 
     def update_internal_state(self, start_pos, end_pos):
@@ -184,8 +183,8 @@ class GameAutomator:
             print(f">>> [基准贪心算法] 理论最高得分: {simple_score}")
             
             # --- God Brain V7 Integration ---
-            print("=== 正在调用神之大脑进行演算 (80s) ===")
-            path = self.solver.solve_hydra(self.grid, time_limit=50, threads=8)
+            print(f"=== 正在调用神之大脑进行演算 ({TIME_LIMIT_SECONDS}s) ===")
+            path = self.solver.solve_hydra(self.grid)
             
             if path:
                 print(f"=== 演算完成，准备执行 {len(path)} 步操作 ===")
