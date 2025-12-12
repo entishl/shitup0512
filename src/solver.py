@@ -77,89 +77,82 @@ def _build_active_indices(map_data, size):
     return result
 
 @njit(fastmath=True, nogil=True, cache=True)
-def _check_solvability(map_data, vals, rows, cols):
+def _check_strict_solvability(count):
     """
-    检查棋盘是否理论可解（大数吞噬模拟）。
-    
-    基于数论：
-    1. 总和必须能被 10 整除
-    2. 大数必须有足够的小数来配对（9 需要 1，8 需要 2 等）
-    
+    Core solvability check logic (Strict).
     Args:
-        map_data: 1D array, 1 表示该位置有数字，0 表示已消除
-        vals: 1D array, 每个位置的数字值 (1-9)
-        rows, cols: 棋盘尺寸
-    
+        count: Array of counts for numbers 0-9.
     Returns:
-        bool: True 表示可解，False 表示不可解
+        bool: True if solvable strictly.
     """
-    # 统计每个数字的出现次数 (1-9)
-    count = np.zeros(10, dtype=np.int32)  # count[0] 不用
     total_sum = 0
-    
-    for i in range(rows * cols):
-        if map_data[i] == 1:
-            v = vals[i]
-            count[v] += 1
-            total_sum += v
-    
-    # 检查 1：总和能被 10 整除
+    for i in range(1, 10):
+        total_sum += i * count[i]
+        
     if total_sum % 10 != 0:
         return False
-    
-    # 检查 2：大数吞噬模拟
-    # 创建库存副本
+        
+    # Big number consumption simulation
     stock = count.copy()
     
-    # 处理 9：每个 9 必须消耗一个 1
-    if stock[1] < stock[9]:
-        return False
-    stock[1] -= stock[9]
-    stock[9] = 0
+    # Check 9: Needs 1
+    if stock[1] < stock[9]: return False
+    stock[1] -= stock[9]; stock[9] = 0
     
-    # 处理 8：每个 8 需要补 2 (优先用 2，否则用两个 1)
+    # Check 8: Needs 2
     need_8 = stock[8]
     use_2 = min(stock[2], need_8)
     stock[2] -= use_2
     remaining_8 = need_8 - use_2
-    need_1_for_8 = remaining_8 * 2
-    if stock[1] < need_1_for_8:
-        return False
-    stock[1] -= need_1_for_8
-    stock[8] = 0
+    if stock[1] < remaining_8 * 2: return False
+    stock[1] -= remaining_8 * 2; stock[8] = 0
     
-    # 处理 7：每个 7 需要补 3 (优先 3，然后 2+1，最后 1+1+1)
+    # Check 7: Needs 3
     for _ in range(stock[7]):
-        if stock[3] >= 1:
-            stock[3] -= 1
-        elif stock[2] >= 1 and stock[1] >= 1:
-            stock[2] -= 1
-            stock[1] -= 1
-        elif stock[1] >= 3:
-            stock[1] -= 3
-        else:
-            return False
+        if stock[3] >= 1: stock[3] -= 1
+        elif stock[2] >= 1 and stock[1] >= 1: stock[2] -= 1; stock[1] -= 1
+        elif stock[1] >= 3: stock[1] -= 3
+        else: return False
     stock[7] = 0
     
-    # 处理 6：每个 6 需要补 4 (优先 4，然后 3+1，2+2，2+1+1，1+1+1+1)
+    # Check 6: Needs 4
     for _ in range(stock[6]):
-        if stock[4] >= 1:
-            stock[4] -= 1
-        elif stock[3] >= 1 and stock[1] >= 1:
-            stock[3] -= 1
-            stock[1] -= 1
-        elif stock[2] >= 2:
-            stock[2] -= 2
-        elif stock[2] >= 1 and stock[1] >= 2:
-            stock[2] -= 1
-            stock[1] -= 2
-        elif stock[1] >= 4:
-            stock[1] -= 4
-        else:
-            return False
+        if stock[4] >= 1: stock[4] -= 1
+        elif stock[3] >= 1 and stock[1] >= 1: stock[3] -= 1; stock[1] -= 1
+        elif stock[2] >= 2: stock[2] -= 2
+        elif stock[2] >= 1 and stock[1] >= 2: stock[2] -= 1; stock[1] -= 2
+        elif stock[1] >= 4: stock[1] -= 4
+        else: return False
     stock[6] = 0
     
     return True
+
+@njit(fastmath=True, nogil=True, cache=True)
+def _check_solvability(map_data, vals, rows, cols, grace_count=0):
+    """
+    Check if the board is theoretically solvable, optionally allowing 'grace_count' removals.
+    """
+    # 1. Count frequencies
+    count = np.zeros(10, dtype=np.int32)
+    for i in range(rows * cols):
+        if map_data[i] == 1:
+            count[vals[i]] += 1
+            
+    # 2. Strict Check
+    if _check_strict_solvability(count):
+        return True
+        
+    # 3. Grace Check (Try removing one number)
+    if grace_count > 0:
+        # Try removing each existing number once
+        for v in range(1, 10):
+            if count[v] > 0:
+                count[v] -= 1
+                if _check_strict_solvability(count):
+                    return True
+                count[v] += 1 # Backtrack
+                
+    return False
 
 @njit(fastmath=True, nogil=True)
 def _evaluate_state(score, map_data, rows, cols, w_island, w_fragment, remaining_count=-1):
