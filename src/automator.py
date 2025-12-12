@@ -337,10 +337,15 @@ class GameAutomator:
             # === OCR 验证：检查识别到的数字个数 ===
             expected_counts = [160, 135]  # 16x10 或 15x9 网格
             if recognized_count not in expected_counts:
-                raise RuntimeError(
-                    f"OCR 识别失败！识别到 {recognized_count} 个数字，"
-                    f"但预期应为 {expected_counts} 之一。请检查游戏窗口是否正确显示。"
-                )
+                print(f"OCR 验证失败 ({recognized_count})，等待 1 秒后重试...")
+                time.sleep(1)
+                recognized_count = self.capture_and_recognize()
+                
+                if recognized_count not in expected_counts:
+                    raise RuntimeError(
+                        f"OCR 识别失败！识别到 {recognized_count} 个数字，"
+                        f"但预期应为 {expected_counts} 之一。请检查游戏窗口是否正确显示。"
+                    )
             print(f"OCR 验证通过：识别到 {recognized_count} 个数字")
             
             # === 数论验证：检查棋盘是否可解 ===
@@ -426,6 +431,7 @@ class GameAutomator:
                 print("程序结束。")
                 return
 
-            print("等待 5 秒后重启循环...")
-            time.sleep(5)
+            print("等待 8 秒后重启循环...")
+            time.sleep(8)
+            is_first_run = True
 
