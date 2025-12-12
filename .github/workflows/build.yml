@@ -30,6 +30,10 @@ jobs:
       run: |
         pyinstaller --clean --noconfirm main.spec
 
+    - name: Compress artifacts
+      run: |
+        Compress-Archive -Path dist/main -DestinationPath release.zip
+
     - name: List dist artifacts
       if: always()
       run: |
@@ -44,4 +48,4 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        files: dist/main.exe
+        files: release.zip
