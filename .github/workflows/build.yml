@@ -35,7 +35,7 @@ jobs:
 
     - name: Compress artifacts
       run: |
-        Compress-Archive -Path dist/main -DestinationPath release.zip
+        7z a -t7z -mx=9 release.7z dist/main
 
     - name: List dist artifacts
       if: always()
@@ -51,4 +51,4 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        files: release.zip
+        files: release.7z
