@@ -6,6 +6,9 @@ on:
       - 'v*.*.*' # 仅在推送 v*.*.* 格式的 tag 时触发
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-and-release:
     runs-on: windows-latest
