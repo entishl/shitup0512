@@ -189,6 +189,6 @@ TIME_LIMIT_PHASE2 = 35.0  # 第二阶段（完全清除）时间限制（秒）
 
 ## 📝 License
 
-MIT License
+CC BY-NC 4.0
 
 (`solver.py`内部核心算法修改自 [sum10_Nikke](https://github.com/Small-tailqwq/sum10_Nikke)，根据原作者要求，此文件内部的代码禁止任何商业使用。)
